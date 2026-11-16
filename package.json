@@ -1,0 +1,10 @@
+{
+  "name": "chatgpt-usage-dock",
+  "version": "1.0.1",
+  "private": true,
+  "description": "ChatGPT quota overview Tampermonkey userscript",
+  "scripts": {
+    "test": "node --check chatgpt-usage-dock.user.js && node tests/smoke.test.js"
+  },
+  "license": "MIT"
+}
