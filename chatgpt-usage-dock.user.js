@@ -2,7 +2,7 @@
 // @name         ChatGPT 额度速览
 // @name:en      ChatGPT Quota Dock
 // @namespace    https://chatgpt.com/
-// @version      1.0.1
+// @version      1.1.0
 // @description  在 ChatGPT 页面显示可读取的剩余额度、重置时间和刷新状态
 // @description:en Displays available ChatGPT quota windows and reset countdowns.
 // @author       marce006982
@@ -158,7 +158,8 @@
     '#cgqd-root{position:fixed;top:84px;right:20px;z-index:2147483000;color:var(--text-primary,#222);font:12px/1.5 "Segoe UI","Microsoft YaHei",sans-serif;user-select:none}',
     '#cgqd-root *{box-sizing:border-box}',
     '#cgqd-root button{font:inherit;color:inherit;cursor:pointer}',
-    '#cgqd-root .cgqd-pill{display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:25px;border:1px solid var(--border-light,#ddd);background:var(--main-surface-primary,#fff);box-shadow:0 4px 14px #0002;font-weight:600;max-width:275px}',
+    '#cgqd-root .cgqd-pill{display:flex;align-items:center;gap:7px;padding:6px 11px;border-radius:25px;border:1px solid var(--border-light,#ddd);background:var(--main-surface-primary,#fff);box-shadow:0 4px 14px #0002;font-weight:600;max-width:275px;cursor:grab;touch-action:none}',
+    '#cgqd-root .cgqd-pill:active{cursor:grabbing}',
     '#cgqd-root .cgqd-dot{width:7px;height:7px;flex-shrink:0;background:#888;border-radius:50%}',
     '#cgqd-root .cgqd-panel{width:292px;max-width:calc(100vw - 25px);margin-top:7px;background:var(--main-surface-primary,#fff);border:1px solid var(--border-light,#ddd);border-radius:12px;padding:13px;box-shadow:0 6px 24px #0002}',
     '#cgqd-root [hidden]{display:none!important}',
@@ -210,8 +211,19 @@
     panel.hidden = !value;
     pill.setAttribute('aria-expanded', String(value));
     setPreference('expanded', value ? 'yes' : 'no');
+    // Expanding the wider details panel must not push it offscreen.
+    if (root.style.left) keepInView();
   }
-  pill.addEventListener('click', function () { open(panel.hidden); });
+  let suppressPillClick = false;
+  pill.addEventListener('click', function (e) {
+    if (suppressPillClick && e && e.detail !== 0) {
+      suppressPillClick = false;
+      e.preventDefault();
+      return;
+    }
+    suppressPillClick = false;
+    open(panel.hidden);
+  });
   closeButton.addEventListener('click', function () { open(false); });
   refreshButton.addEventListener('click', function () { refresh(); });
   open(getPreference('expanded') === 'yes');
@@ -279,38 +291,67 @@
     }
   }
 
-  // Drag panel header; save position in localStorage.
-  let drag = null;
-  header.addEventListener('pointerdown', function (e) {
-    if (e.button !== 0 || e.target.closest('button,a')) return;
+  // Both the collapsed pill and the expanded header are drag handles.
+  // Only a movement of at least 5px counts as dragging, so clicking still opens the panel.
+  function placeAt(left, top) {
     const rect = root.getBoundingClientRect();
-    drag = { x: e.clientX, y: e.clientY, left: rect.left, top: rect.top };
-    header.setPointerCapture(e.pointerId);
-  });
-  header.addEventListener('pointermove', function (e) {
-    if (!drag) return;
-    const x = limit(drag.left + e.clientX - drag.x, 0, Math.max(0, window.innerWidth - 60));
-    const y = limit(drag.top + e.clientY - drag.y, 0, Math.max(0, window.innerHeight - 35));
-    root.style.left = x + 'px';
-    root.style.top = y + 'px';
+    root.style.left = limit(left, 0, Math.max(0, window.innerWidth - rect.width)) + 'px';
+    root.style.top = limit(top, 0, Math.max(0, window.innerHeight - rect.height)) + 'px';
     root.style.right = 'auto';
-  });
-  header.addEventListener('pointerup', function () {
-    if (!drag) return;
-    drag = null;
+  }
+  function keepInView() {
+    if (!root.style.left || !root.style.top) return;
+    placeAt(parseFloat(root.style.left), parseFloat(root.style.top));
+  }
+  function savePosition() {
     setPreference('position', JSON.stringify({ left: root.style.left, top: root.style.top }));
-  });
-  header.addEventListener('pointercancel', function () { drag = null; });
+  }
+
+  let drag = null;
+  function enableDrag(handle, ignoreActions) {
+    handle.addEventListener('pointerdown', function (e) {
+      if (e.button !== 0 || (ignoreActions && e.target.closest('button,a'))) return;
+      if (handle === pill) suppressPillClick = false;
+      const rect = root.getBoundingClientRect();
+      drag = {
+        handle: handle, pointerId: e.pointerId, x: e.clientX, y: e.clientY,
+        left: rect.left, top: rect.top, moved: false
+      };
+      handle.setPointerCapture(e.pointerId);
+    });
+    handle.addEventListener('pointermove', function (e) {
+      if (!drag || drag.handle !== handle || drag.pointerId !== e.pointerId) return;
+      const dx = e.clientX - drag.x;
+      const dy = e.clientY - drag.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+      drag.moved = true;
+      if (handle === pill) suppressPillClick = true;
+      placeAt(drag.left + dx, drag.top + dy);
+    });
+    function finishDrag(e) {
+      if (!drag || drag.handle !== handle || drag.pointerId !== e.pointerId) return;
+      if (drag.moved) savePosition();
+      drag = null;
+    }
+    handle.addEventListener('pointerup', finishDrag);
+    handle.addEventListener('pointercancel', finishDrag);
+    handle.addEventListener('lostpointercapture', finishDrag);
+  }
+  enableDrag(pill, false);
+  enableDrag(header, true);
 
   try {
     const position = JSON.parse(getPreference('position') || 'null');
     if (position && Number.isFinite(parseFloat(position.left)) &&
         Number.isFinite(parseFloat(position.top))) {
-      root.style.left = limit(parseFloat(position.left), 0, Math.max(0, window.innerWidth - 60)) + 'px';
-      root.style.top = limit(parseFloat(position.top), 0, Math.max(0, window.innerHeight - 35)) + 'px';
-      root.style.right = 'auto';
+      placeAt(parseFloat(position.left), parseFloat(position.top));
     }
   } catch (_) { /* no saved position */ }
+  window.addEventListener('resize', function () {
+    if (!root.style.left) return;
+    keepInView();
+    savePosition();
+  });
 
   // Refresh while visible; keep the displayed reset time counting down.
   setInterval(function () {
